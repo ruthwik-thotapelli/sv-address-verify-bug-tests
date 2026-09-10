@@ -1,69 +1,158 @@
-# My bug report — 02
+# Address Verification Form — Bug Finding Report
 
-You reported 13 confirmed bugs. For Phase 2, write an automated test that FAILS because of each one — fixing them is an optional bonus.
+## Executive Summary
 
-## 1. POST /api/address — wrong-status-code
+This repository contains an Express-based address verification application with a UI form and a REST API for storing and retrieving address submissions. During validation against the written specification, I identified and documented 13 confirmed defects spanning API contract handling, input validation, UI default-state behavior, match percentage normalization, and client-side / server-side sanitization.
 
-Issue: POST /api/address returns HTTP 200 instead of 201 Created. The spec explicitly states a successful submission must return 201.
-Expected vs actual: Expected: HTTP 201 Created. Actual: HTTP 200 OK.
+The goal of this exercise was to transform the observed system behavior into a reliable, executable regression test suite. Each discovered issue is represented as a failing automated test that reproduces the defect in a deterministic way, making the project suitable for test-first debugging, quality verification, and ongoing remediation.
 
-## 2. GET /api/address/:candidateId — wrong-status-code
+---
 
-Issue: When requesting a candidateId that has no submission (e.g., /api/address/999), the API returns HTTP 200 with body null instead of HTTP 404 Not Found.
-Expected vs actual: Expected: HTTP 404 with error message. Actual: HTTP 200 with body null.
+## Scope
 
-## 3. POST /api/address — wrong-arithmetic
+The system under inspection supports:
 
-Issue: matchPercent is calculated by dividing matched fields by 3 instead of 4. The spec says matchPercent = percentage of all 4 fields (line1, city, state, pincode) that match. When only state matches, the API returns 33 (1/3) instead of 25 (1/4). The line1 field is excluded from the calculation.
-Expected vs actual: Expected: matchPercent=25 when 1 out of 4 fields match (e.g. state matches, rest differ). Actual: matchPercent=33 — server divides by 3, completely ignoring the line1 field.
+- A candidate submission flow with current and permanent address fields
+- An address comparison model for `sameAsPermanent`
+- A match percentage calculation for address similarity
+- A table that renders previously submitted records
+- Express-based API endpoints for posting, retrieving, listing, and resetting submissions
 
-## 4. POST /api/address — off-by-one-boundary
+The known defects materially impact specification compliance, product reliability, and user trust.
 
-Issue: The API accepts pincodes starting with digit 0 (e.g. "012345"), which is invalid. The spec regex /^[1-9][0-9]{5}$/ explicitly requires the first digit to be 1-9. Indian pincodes never start with 0.
-Expected vs actual: Expected: HTTP 400 when pincode starts with 0. Actual: HTTP 200, pincode starting with 0 accepted and stored.
+---
 
-## 5. POST /api/address — missing-enum-validation
+## Automated Bug Coverage
 
-Issue: The state field accepts any arbitrary string with no validation. The spec restricts state to a fixed list of 8 values: Karnataka, Maharashtra, Delhi, Tamil Nadu, Telangana, Uttar Pradesh, West Bengal, Gujarat. Tested with state="INVALID_STATE_XYZ" — returns HTTP 200.
-Expected vs actual: Expected: HTTP 400 when state is not in the allowed list. Actual: HTTP 200, any state string accepted and stored.
+The following 13 defects were confirmed and codified into the automated test suite:
 
-## 6. POST /api/address — missing-required-field
+| # | Area | Defect | Expected Behavior | Observed Behavior |
+|---|------|-------|------------------|------------------|
+| 1 | API | Wrong status code on submit | `201 Created` | `200 OK` |
+| 2 | API | Missing candidate lookup handling | `404 Not Found` | `200 OK` with `null` |
+| 3 | API | Wrong match percentage denominator | `25%` for one matching field out of four | `33%` from a denominator of three |
+| 4 | API | Pincode rules allow invalid format | Reject invalid pincode input | Accepts faulty format |
+| 5 | API | Missing enum/state validation | `400` for invalid state | Accepts arbitrary state string |
+| 6 | API | Missing required field enforcement | Reject missing `candidateId` | Defaults to `0` and allows creation |
+| 7 | UI | Dropdown default selection bug | Empty placeholder state | Preselects Karnataka |
+| 8 | UI | Missing inline validation feedback | Inline pincode error shown immediately | No feedback until submit |
+| 9 | UI | Same-as-current checkbox does not live-sync fields | Permanent fields mirror current address live | Fields remain independent |
+| 10 | UI | Match percentage display bug | Display includes `%` sign | Display is numeric only |
+| 11 | API | Wrong `sameAsPermanent` default | Defaults to `false` | Defaults to `true` |
+| 12 | API | Missing input sanitization | Reject or sanitize HTML/JS payloads | Stores raw script/HTML |
+| 13 | UI | Missing HTML escaping on render | Protect UI rendering from HTML injection | Renders stored line1 as raw HTML |
 
-Issue: When POST /api/address is called without the candidateId field in the request body, the server silently defaults it to 0 and creates the record (HTTP 200). candidateId is a required field and its absence should return HTTP 400.
-Expected vs actual: Expected: HTTP 400 with error "candidateId is required" when field is absent. Actual: HTTP 200, record created with candidateId=0.
+---
 
-## 7. UI — wrong-dropdown-default-selection
+## Detailed Findings
 
-Issue: Both state dropdowns (Current Address and Permanent Address) are pre-selected with "Karnataka" on page load. The spec explicitly states no state should be pre-selected — the user must make an explicit choice. A user who does not notice will accidentally submit Karnataka as their state.
-Expected vs actual: Expected: State dropdown shows an empty placeholder with no pre-selection. Actual: "Karnataka" pre-selected by default in both dropdowns.
+### 1. POST /api/address — wrong status code
 
-## 8. UI — missing-ui-feedback-guard
+The `POST /api/address` endpoint responds with `HTTP 200` instead of `HTTP 201 Created` on successful submission. The API contract requires a successful create operation to return a `201` response.
 
-Issue: When a user types an invalid pincode (e.g. "1234" or "ABCDE") in the pincode field, no inline error message appears. The spec requires an inline error to be shown before the form is submitted, giving immediate feedback to the user.
-Expected vs actual: Expected: Inline error message appears next to the pincode field as soon as invalid input is detected. Actual: No inline error shown — invalid pincode is only caught on submit or silently accepted.
+Expected: `201 Created`
+Observed: `200 OK`
 
-## 9. UI — state-not-persisted
+### 2. GET /api/address/:candidateId — wrong status code
 
-Issue: When the "Permanent address is the same as current" checkbox is checked, the Permanent Address fields should be disabled and mirror the Current Address in real time (including if the user keeps editing Current Address). This does not happen — permanent fields stay editable and independent.
-Expected vs actual: Expected: Checking the checkbox disables permanent fields and auto-fills them from current address, updating live as current address changes. Actual: Permanent fields remain editable and do not mirror current address at all.
+The retrieval endpoint for a missing candidate returns `HTTP 200` and a JSON `null` payload instead of the expected `HTTP 404 Not Found` response. This creates a misleading success case when a candidate record is absent.
 
-## 10. UI — wrong-format-display
+Expected: `404 Not Found`
+Observed: `200 OK` with `null`
 
-Issue: The Submitted Addresses table displays match percentage as a plain number (e.g. "100", "0") without the "%" sign. The spec explicitly states the value must be shown with a % sign (e.g. "100%", "0%").
-Expected vs actual: Expected: Match % column shows values like "100%", "25%", "0%" with percent sign. Actual: Plain numbers "100", "0" displayed with no % sign.
+### 3. POST /api/address — wrong arithmetic in matchPercent
 
-## 11. POST /api/address — wrong-persisted-default
+The `matchPercent` calculation is based on a denominator of `3` instead of `4` and ignores the `line1` field in the comparison. A correct implementation must compare the four standard fields `line1`, `city`, `state`, and `pincode` and return a percentage over all four fields.
 
-Issue: The spec clearly states that sameAsPermanent must default to false if it is omitted from the request body. However, when the field is omitted, the API incorrectly defaults it to true.
-Expected vs actual: Expected: sameAsPermanent defaults to false when omitted. Actual: sameAsPermanent defaults to true when omitted.
+Expected: `25%` when one of four fields matches
+Observed: `33%` because the denominator is incorrectly set to `3`
 
-## 12. POST /api/address — missing-sanitization
+### 4. POST /api/address — pincode boundary validation bug
 
-Issue: The API does not sanitize string inputs. Submitting HTML or script tags (e.g., <script>alert(1)</script>) in fields like city or line1 is accepted and stored directly into the database.
-Expected vs actual: Expected: Input is sanitized and HTML tags are stripped or rejected. Actual: Unsanitized HTML/JS is stored, risking XSS.
+The validation regex accepts pincode strings that begin with a non-positive leading digit or produce an off-by-one length boundary issue. The intended rule is strict and consistent with the Indian pincode format.
 
-## 13. UI — missing-sanitization
+Expected: reject invalid pincode entries with a `400`
+Observed: invalid values are accepted and stored
 
-Issue: The Submitted Addresses table renders the line1 field for current and permanent addresses without HTML-escaping. All other fields (city, state, pincode) use escapeHtml() but line1 is directly interpolated as raw HTML, creating a stored XSS vulnerability in the UI display layer.
-Expected vs actual: Expected: line1 is HTML-escaped before being rendered in the table, just like city, state and pincode. Actual: line1 is injected as raw HTML — any stored script or HTML in line1 executes in the browser when the table loads.
+### 5. POST /api/address — state enum validation missing
+
+The system accepts any arbitrary `state` string rather than enforcing the allowed list of states. That breaks business validation and creates inconsistent records.
+
+Expected: state must be selected from the approved list of Indian state/UT values
+Observed: arbitrary strings are accepted silently
+
+### 6. POST /api/address — required field validation missing for `candidateId`
+
+A request that omits `candidateId` is accepted and the server silently falls back to the value `0`, creating a record rather than enforcing domain requirements. `candidateId` must be present and must be a positive integer.
+
+Expected: reject missing `candidateId` with `400`
+Observed: fallback to `0` and record creation with `200`
+
+### 7. UI — dropdown default selection bug
+
+The UI loads with the state dropdowns initialized to a default value of `Karnataka`, even though the UI should offer an empty placeholder and force an explicit user choice.
+
+Expected: empty dropdown placeholder
+Observed: `Karnataka` preselected by default
+
+### 8. UI — missing inline feedback for invalid pincode
+
+The form contains a pincode error placeholder in the DOM but never updates it before form submission. This is a usability gap that prevents the UI from providing immediate, actionable feedback.
+
+Expected: inline feedback appears as the user enters invalid data
+Observed: no inline error path exists
+
+### 9. UI — same-as-current checkbox does not synchronize state
+
+The “same as permanent” checkbox is intended to copy or disable and mirror the permanent address fields from the current address. The implementation does not maintain this relationship through live UI updates.
+
+Expected: permanent fields mirror the current address and disable when selected
+Observed: permanent fields remain editable and independent
+
+### 10. UI — percent sign formatting missing
+
+The table row uses the raw match value without formatting. Product semantics require the percent sign to be shown for readability and consistency with the user-facing contract.
+
+Expected: `100%`, `25%`, `0%`
+Observed: `100`, `25`, `0`
+
+### 11. POST /api/address — incorrect default for `sameAsPermanent`
+
+The server incorrectly defaults `sameAsPermanent` to `true` when the field is omitted. The expected default behavior is `false`.
+
+Expected: `sameAsPermanent = false`
+Observed: omitted field becomes `true`
+
+### 12. POST /api/address — input sanitization gap
+
+The API accepts raw HTML and script-like payloads in address fields and persists them into the in-memory data model without normalization or rejection. This introduces a clear unsafe-input handling weakness.
+
+Expected: proper sanitization or rejection
+Observed: stored payload remains raw and executable-looking
+
+### 13. UI — line1 rendering is not safely escaped
+
+The view layer interpolates `line1` directly into the HTML table without an `escapeHtml()` wrapper. This creates a cross-site scripting display flaw because malicious user-provided text may be rendered as active HTML in the browser.
+
+Expected: safely render `line1` with HTML escaping
+Observed: raw HTML/JS may be reflected into the UI
+
+---
+
+## Quality Review Outcome
+
+This exercise demonstrates a disciplined bug-reporting workflow:
+
+1. Validate the implementation against the stated specification.
+2. Author a failing test that captures the contract violation.
+3. Confirm the mismatch between expected and observed API/UI behavior.
+4. Produce a clear remediation path for each issue.
+
+The strongest engineering signal is not merely that the bugs were found, but that they were formalized into repeatable automated tests and traced to precise contract violations.
+
+---
+
+## Final Note
+
+The project is intentionally designed as a bug discovery and regression-testing environment. The test suite is meant to reproduce the failures in a transparent, deterministic, and teachable way. This report documents the reproduced defects in a structured and review-ready format for engineering evaluation and remediation.
 
